@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "HTTrack Extension VN",
+  "version": "1.0.0",
+  "description": "Lưu một trang hoặc cả website (bản Desktop và iPhone) thành file ZIP để xem offline.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "tabs", "scripting", "downloads", "debugger", "offscreen", "storage", "notifications"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "HTTrack Extension VN",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

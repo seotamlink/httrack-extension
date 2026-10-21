@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>HTTrack Extension VN</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
+    </div>
+    <div>
+      <h1>HTTrack Extension VN</h1>
+      <p class="sub">Lưu website thành ZIP để xem offline</p>
+    </div>
+  </header>
+
+  <section class="card current">
+    <span class="label">Trang hiện tại</span>
+    <div id="tabUrl" class="url" title=""></div>
+  </section>
+
+  <section class="card">
+    <span class="label">Chế độ</span>
+    <div class="seg" id="modeBox">
+      <label><input type="radio" name="mode" value="single" checked><span>Chỉ trang hiện tại</span></label>
+      <label><input type="radio" name="mode" value="mirror"><span>Mirror website</span></label>
+    </div>
+
+    <div id="mirrorBox" class="mirror" hidden>
+      <label class="field"><span>Độ sâu tối đa <em>0-10</em></span>
+        <input type="number" id="maxDepth" min="0" max="10" value="2">
+      </label>
+      <label class="field"><span>Số trang tối đa <em>1-5000</em></span>
+        <input type="number" id="maxPages" min="1" max="5000" value="100">
+      </label>
+      <label class="field"><span>Độ trễ giữa các trang <em>ms</em></span>
+        <input type="number" id="delay" min="0" max="10000" step="100" value="800">
+      </label>
+      <label class="check"><input type="checkbox" id="includeSub"><span>Bao gồm subdomain</span></label>
+      <label class="check"><input type="checkbox" id="robots" checked><span>Tuân thủ robots.txt</span></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <span class="label">Thiết bị</span>
+    <div class="chips one" id="deviceBox">
+      <label class="chip"><input type="checkbox" id="devDesktop" checked><span>Responsive (1 bản tự co giãn)</span></label>
+    </div>
+    <label class="field"><span>Bản mobile riêng</span>
+      <select id="mobileMode">
+        <option value="auto">Tự động</option>
+        <option value="on">Luôn lưu</option>
+        <option value="off">Tắt</option>
+      </select>
+    </label>
+    <p class="hint">Tự động: chỉ lưu thêm bản mobile khi trang trả giao diện khác cho điện thoại (như kgame). Nếu có cả hai bản, ZIP có thêm index.html tự chọn theo màn hình.</p>
+    <label class="field" id="mobileWidthRow"><span>Bề rộng mobile <em>px</em></span>
+      <input type="number" id="mobileWidth" min="280" max="600" value="393">
+    </label>
+  </section>
+
+  <button id="mainBtn" type="button">Bắt đầu lưu</button>
+
+  <div class="progress" id="progressWrap" hidden><div id="progressBar"></div></div>
+  <div id="status" class="status"></div>
+  <div id="error" class="error" hidden></div>
+
+  <footer class="foot">Thiết kế bởi <strong>@seotamlink</strong></footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
