@@ -116,29 +116,40 @@ export class ZipSink {
   }
 }
 
-// ===== Trang chọn bản responsive / mobile theo màn hình =====
+// ===== Trang gộp: một file index.html hiện bản responsive hoặc mobile theo độ rộng cửa sổ =====
 export function buildLauncher({ rootUrl, responsive, mobile, breakpoint = 768 }) {
   const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
-  const r = 'responsive/' + enc(responsive);
-  const m = 'mobile/' + enc(mobile);
+  const r = enc(responsive);
+  const m = enc(mobile);
+  const title = rootUrl.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bản lưu offline</title>
-<style>body{font:16px system-ui,sans-serif;max-width:420px;margin:15vh auto;padding:0 16px;text-align:center}a{display:block;margin:10px 0;padding:12px;border:1px solid #ccc;border-radius:8px;text-decoration:none;color:#2563eb}</style>
+<title>Bản lưu offline - ${title}</title>
+<style>html,body{margin:0;height:100%;background:#fff}iframe{position:fixed;top:0;left:0;width:100%;height:100%;border:0}iframe[hidden]{display:none}</style>
 </head>
 <body>
-<p>Bản lưu của <strong>${rootUrl.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</strong></p>
-<a href="${r}">Bản Responsive (máy tính)</a>
-<a href="${m}">Bản Mobile (điện thoại)</a>
-<p><small>Thêm <code>?v=mobile</code> hoặc <code>?v=responsive</code> vào địa chỉ để chọn thủ công.</small></p>
+<iframe id="wide" title="Bản responsive" hidden></iframe>
+<iframe id="narrow" title="Bản mobile" hidden></iframe>
+<noscript><p><a href="${r}">Bản Responsive</a> | <a href="${m}">Bản Mobile</a></p></noscript>
 <script>
 (function () {
+  var src = { wide: ${JSON.stringify(r)}, narrow: ${JSON.stringify(m)} };
+  var mq = window.matchMedia('(max-width: ${breakpoint}px)');
   var q = location.search.match(/[?&]v=(mobile|responsive)/);
-  var isMobile = q ? q[1] === 'mobile' : (window.matchMedia('(max-width: ${breakpoint}px)').matches || /Mobi|Android|iPhone/i.test(navigator.userAgent));
-  location.replace(isMobile ? ${JSON.stringify(m)} : ${JSON.stringify(r)});
+  function show() {
+    var narrow = q ? q[1] === 'mobile' : mq.matches;
+    ['wide', 'narrow'].forEach(function (k) {
+      var f = document.getElementById(k);
+      var on = (k === 'narrow') === narrow;
+      if (on && !f.getAttribute('src')) f.setAttribute('src', src[k]); // chỉ tải bản đang cần, đổi qua lại không tải lại
+      f.hidden = !on;
+    });
+  }
+  show();
+  if (!q) (mq.addEventListener ? mq.addEventListener('change', show) : mq.addListener(show));
 })();
 </script>
 </body>

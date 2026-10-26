@@ -61,6 +61,25 @@
     </label>
   </section>
 
+  <section class="card">
+    <span class="label">Kiểu đầu ra</span>
+    <label class="field"><span>Cách lưu file</span>
+      <select id="output">
+        <option value="bundle">Gọn: 1 HTML + 1 CSS + thư mục ảnh</option>
+        <option value="files">Nhiều file (chuẩn)</option>
+      </select>
+    </label>
+    <p class="hint" id="outputHint"></p>
+    <label class="check" id="inlineRow"><input type="checkbox" id="inlineSmall" checked><span>Gộp ảnh nhỏ vào HTML/CSS</span></label>
+  </section>
+
+  <section class="card">
+    <span class="label">Popup quảng cáo</span>
+    <label class="check"><input type="checkbox" id="manual"><span>Tôi tự tắt popup trước khi quét</span></label>
+    <p class="hint">Extension mở sẵn từng bản trong một tab và dừng lại. Bạn tắt popup hoặc F5, rồi bấm "Tiếp tục quét".</p>
+  </section>
+
+  <button id="resumeBtn" type="button" hidden>Tiếp tục quét</button>
   <button id="mainBtn" type="button">Bắt đầu lưu</button>
 
   <div class="progress" id="progressWrap" hidden><div id="progressBar"></div></div>

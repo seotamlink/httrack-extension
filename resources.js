@@ -6,8 +6,8 @@
  * - CSS được tải đệ quy các url()/@import (tối đa 5 cấp) rồi mới viết lại và lưu
  */
 import { isBlockedUrl } from './crawler.js';
-import { assetLocalPath, cleanMime, extFromMime, getExt, mimeFromExt } from './naming.js';
-import { extractCssRefs, resolveRef, rewriteCssText } from './rewrite.js';
+import { assetLocalPath, cleanMime, flatAssetPath, extFromMime, getExt, mimeFromExt } from './naming.js';
+import { extractCssRefs, replaceCssImports, resolveRef, rewriteCssText } from './rewrite.js';
 
 export const MAX_RESOURCE_BYTES = 80 * 1024 * 1024; // 80MB / tài nguyên
 export const MAX_DOC_BYTES = 30 * 1024 * 1024;      // 30MB / file tải kèm theo link (pdf, zip...)
@@ -68,6 +68,12 @@ class Pool {
   }
 }
 
+function bytesToB64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 const GENERIC_MIME = new Set(['', 'application/octet-stream', 'binary/octet-stream', 'text/plain', 'application/x-unknown']);
 const TEXT_MIME = /^(text\/|application\/(json|xml|javascript)|image\/svg)/;
 
@@ -90,7 +96,13 @@ export class AssetStore {
 
   localFor(key) {
     const e = this.entries.get(key);
-    return e && e.ok ? e.local : null;
+    return e && e.ok && !e.css ? e.local : null;
+  }
+
+  // Chế độ gói gọn: nội dung CSS đã viết lại (ảnh/font nhúng sẵn) để gộp vào file CSS chung
+  cssTextFor(key) {
+    const e = this.entries.get(key);
+    return e && e.ok && e.css ? e.cssText : null;
   }
 
   ensureMany(urls, opts) {
@@ -143,7 +155,21 @@ export class AssetStore {
     if (GENERIC_MIME.has(mime)) mime = mimeFromExt(ext) || mime;
     const isCss = mime === 'text/css' || ext === 'css';
     let bytes = got.bytes;
-    const local = assetLocalPath(key, this.rootHost, mime, this.usedPaths);
+
+    // Chế độ thường: nhúng ảnh nhỏ bằng data URI. Chế độ gọn: mọi ảnh/font là file trong thư mục chung, không nhúng
+    const inlinable = !this.bundle && this.inlineMax && bytes.length <= this.inlineMax && /^image\/[a-z0-9.+-]+$/.test(mime);
+    if (!isCss && inlinable) {
+      this.bytes += bytes.length;
+      if (this.totalBudget && this.bytes > this.totalBudget) this.onLimit?.();
+      const entry = { ok: true, local: `data:${mime};base64,${bytesToB64(bytes)}`, mime, size: bytes.length, inline: true };
+      this.entries.set(key, entry);
+      this.okCount++;
+      this.report.resOk.push({ device: this.device, url: key, local: '(gộp vào HTML/CSS)' });
+      return entry;
+    }
+    const local = this.bundle
+      ? (isCss ? '' : flatAssetPath(key, mime, this.usedPaths))
+      : assetLocalPath(key, this.rootHost, mime, this.usedPaths);
 
     if (isCss) {
       let text = new TextDecoder('utf-8').decode(bytes);
@@ -160,6 +186,22 @@ export class AssetStore {
         const [k, isImport] = JSON.parse(c);
         return this.ensure(k, { bodies: opts.bodies, chain, importDepth: isImport ? depth + 1 : depth });
       }));
+      if (this.bundle) {
+        // Gộp @import trực tiếp vào nội dung, rồi viết lại url() trỏ vào thư mục ảnh chung. Không ghi file riêng.
+        const merged = replaceCssImports(text, (ref, tail) => {
+          const r = resolveRef(ref, key);
+          const child = r ? this.cssTextFor(r.key) : null;
+          if (child === null) return null;
+          return tail ? `@media ${tail}{${child}}` : child;
+        });
+        const cssText = rewriteCssText(merged, { baseUrl: key, fromLocal: '', rootMarker: true, resolveAsset: (k) => this.localFor(k) });
+        this.bytes += cssText.length;
+        const entry = { ok: true, local: '(css)', css: true, cssText, mime: 'text/css', size: cssText.length };
+        this.entries.set(key, entry);
+        this.okCount++;
+        this.report.resOk.push({ device: this.device, url: key, local: '(gộp vào file CSS của trang)' });
+        return entry;
+      }
       const rewritten = rewriteCssText(text, {
         baseUrl: key, fromLocal: local, resolveAsset: (k) => this.localFor(k)
       });

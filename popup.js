@@ -23,6 +23,9 @@ function readConfig() {
     delay: Number($('delay').value),
     includeSub: $('includeSub').checked,
     robots: $('robots').checked,
+    output: $('output').value,
+    inlineSmall: $('inlineSmall').checked,
+    manual: $('manual').checked,
     desktop: $('devDesktop').checked,
     mobileMode: $('mobileMode').value,
     mobileWidth: Number($('mobileWidth').value)
@@ -37,12 +40,22 @@ function applyConfig(c) {
   if (c.delay != null) $('delay').value = c.delay;
   $('includeSub').checked = !!c.includeSub;
   $('robots').checked = c.robots !== false;
+  $('inlineSmall').checked = c.inlineSmall !== false;
+  $('manual').checked = !!c.manual;
+  $('output').value = c.output === 'files' ? 'files' : 'bundle';
   $('devDesktop').checked = c.desktop !== false;
   $('mobileMode').value = c.mobileMode || (c.mobile === true ? 'on' : 'auto');
   if (c.mobileWidth != null) $('mobileWidth').value = c.mobileWidth;
 }
 
+const OUTPUT_HINTS = {
+  bundle: 'Mỗi trang có 1 file HTML và 1 file CSS. Mọi ảnh nằm chung trong thư mục images/ (font trong fonts/).',
+  files: 'Ảnh, CSS, font lưu thành file riêng theo cấu trúc thư mục của trang gốc, dùng chung giữa các bản.'
+};
+
 function updateModeUi() {
+  $('outputHint').textContent = OUTPUT_HINTS[$('output').value];
+  $('inlineRow').hidden = $('output').value === 'bundle';
   $('mirrorBox').hidden = getMode() !== 'mirror';
   $('mobileWidthRow').hidden = $('mobileMode').value === 'off';
 }
@@ -63,6 +76,7 @@ function render(state) {
   btn.textContent = running ? 'Hủy' : 'Bắt đầu lưu';
   btn.classList.toggle('cancel', running);
   btn.disabled = !running && !currentTab;
+  $('resumeBtn').hidden = !(state && state.running && state.phase === 'waiting');
   const hasProgress = running || (state && (state.phase === 'done' || state.phase === 'cancelled'));
   $('progressWrap').hidden = !hasProgress;
   $('progressBar').style.width = (state ? state.percent || 0 : 0) + '%';
@@ -111,12 +125,17 @@ async function init() {
 
   document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', updateModeUi));
   $('mobileMode').addEventListener('change', updateModeUi);
+  $('output').addEventListener('change', updateModeUi);
   // Không cho tắt cả hai: bỏ Responsive thì bản mobile không được là "Tắt"
   $('devDesktop').addEventListener('change', () => {
     if (!$('devDesktop').checked && $('mobileMode').value === 'off') $('mobileMode').value = 'on';
     updateModeUi();
   });
   $('mainBtn').addEventListener('click', () => (running ? cancel() : start()));
+  $('resumeBtn').addEventListener('click', async () => {
+    $('resumeBtn').hidden = true;
+    await chrome.runtime.sendMessage({ type: 'resume' });
+  });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'session' && changes[STATE_KEY]) render(changes[STATE_KEY].newValue);

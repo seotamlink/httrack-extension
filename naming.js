@@ -138,7 +138,7 @@ function hostPrefix(u, rootHost) {
 
 // ===== Tên file trang HTML =====
 // used: Map dùng chung giữa trang và tài nguyên của một thiết bị. Trả về đường dẫn cục bộ.
-export function pageLocalPath(rawUrl, rootHost, used) {
+export function pageLocalPath(rawUrl, rootHost, used, devicePrefix = '') {
   const u = new URL(rawUrl);
   const segs = u.pathname.split('/').filter(Boolean).map(decodeSeg);
   const endsSlash = u.pathname.endsWith('/') || segs.length === 0;
@@ -152,7 +152,7 @@ export function pageLocalPath(rawUrl, rootHost, used) {
   }
   if (u.search) name += '_' + shortHash(u.href); // trang có query: tránh ghi đè
   const file = sanitizeSegment(name + '.' + ext);
-  const fullDir = [...hostPrefix(u, rootHost), ...dir].map(sanitizeSegment);
+  const fullDir = [...(devicePrefix ? [devicePrefix] : []), ...hostPrefix(u, rootHost), ...dir].map(sanitizeSegment);
   return claimPath(fullDir, file, u.href, used);
 }
 
@@ -176,6 +176,21 @@ export function assetLocalPath(rawUrl, rootHost, mime, used) {
   const file = sanitizeSegment(ext ? name + '.' + ext : name);
   const fullDir = [...hostPrefix(u, rootHost), ...dir].map(sanitizeSegment);
   return claimPath(fullDir, file, u.href, used);
+}
+
+// Chế độ gọn: mọi tài nguyên không phải HTML/CSS nằm phẳng trong images/ (ảnh), fonts/ (font), media/ (còn lại)
+export function flatAssetPath(rawUrl, mime, used) {
+  const u = new URL(rawUrl);
+  const last = decodeSeg(u.pathname.split('/').filter(Boolean).pop() || '');
+  const mimeExt = extFromMime(mime);
+  let name = last, ext = mimeExt;
+  const m = /^(.*)\.([A-Za-z0-9]{1,6})$/.exec(last);
+  if (m && KNOWN_EXT.has(m[2].toLowerCase())) { name = m[1]; ext = m[2]; }
+  if (!name) name = 'file';
+  if (u.search) name += '_' + shortHash(u.href);
+  const file = sanitizeSegment(ext ? name + '.' + ext : name);
+  const folder = /^image\//.test(mime) ? 'images' : (/font/.test(mime) ? 'fonts' : 'media');
+  return claimPath([folder], file, u.href, used);
 }
 
 // ===== Test =====
@@ -204,6 +219,10 @@ export function runNamingTests() {
     ['https://example.com/product.html?id=5', 'product_' + shortHash('https://example.com/product.html?id=5') + '.html'],
     ['https://blog.example.com/a', '_external/blog.example.com/a/index.html']
   ], page));
+  results.push(runCases('pageLocalPath-thiet-bi', [
+    [['https://example.com/a/', 'mobile'], 'mobile/a/index.html'],
+    [['https://example.com/', 'responsive'], 'responsive/index.html']
+  ], (u, d) => pageLocalPath(u, root, new Map(), d)));
   const used = new Map();
   const a = pageLocalPath('https://example.com/About', root, used);
   const b = pageLocalPath('https://example.com/about', root, used);

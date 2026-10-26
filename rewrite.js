@@ -248,6 +248,16 @@ export function replaceCssUrls(css, fn) {
   });
 }
 
+// Thay từng @import bằng chuỗi do fn(ref, mediaTail) trả về (null = giữ nguyên)
+export function replaceCssImports(css, fn) {
+  return css.replace(CSS_RE, (match, i1, i2, i3, i4, i5, tail) => {
+    if (!/^@import/i.test(match)) return match;
+    const ref = cssUnescape(i1 ?? i2 ?? i3 ?? i4 ?? i5 ?? '').trim();
+    const out = ref ? fn(ref, (tail || '').trim()) : null;
+    return out === null || out === undefined ? match : out;
+  });
+}
+
 export function extractCssRefs(css) {
   const out = [];
   replaceCssUrls(css, (ref, isImport) => { out.push({ ref, isImport }); return null; });
@@ -260,7 +270,12 @@ export function rewriteCssText(css, opts) {
     const r = resolveRef(ref, opts.baseUrl);
     if (!r) return null;
     const local = opts.resolveAsset(r.key);
-    if (local) return relUrl(opts.fromLocal, local) + r.hash;
+    if (local) {
+      if (local.startsWith('data:')) return local;
+      // Chế độ gọn: CSS dùng chung chưa biết nó sẽ nằm ở thư mục nào, đánh dấu \u0001 để thay bằng ../ khi ghi file
+      if (opts.rootMarker) return '\u0001' + local.split('/').map(encodeURIComponent).join('/') + r.hash;
+      return relUrl(opts.fromLocal, local) + r.hash;
+    }
     return r.key + r.hash; // không lưu được: dùng URL tuyệt đối gốc
   });
 }
@@ -325,7 +340,7 @@ export function processHtml(html, mode, opts) {
   };
   const mapRef = (r, keepOnFail) => {
     const local = opts.resolveAsset(r.key);
-    if (local) return relUrl(opts.fromLocal, local) + r.hash;
+    if (local) return local.startsWith('data:') ? local : relUrl(opts.fromLocal, local) + r.hash;
     return keepOnFail ? null : r.key + r.hash;
   };
   const removeElement = (idx, name) => {
@@ -341,12 +356,25 @@ export function processHtml(html, mode, opts) {
 
   let hasCharset = false;
   let headIdx = -1;
+  // Chế độ gói gọn: gộp mọi stylesheet/style vào một file CSS, chèn <link> tại vị trí của cái đầu tiên
+  let slot = null;
+  const bundleSlot = (tok) => { if (!slot) slot = tok; else tok.removed = true; };
+  const wrapMedia = (text, media) => (media && media.trim().toLowerCase() !== 'all' ? `@media ${media}{${text}}` : text);
 
   for (let idx = 0; idx < tokens.length; idx++) {
     const t = tokens[idx];
     if (t.type === 'raw') {
       if (t.tag === 'style' && !tokens[idx - 1]?.removed && mode !== 'links') {
         for (const { ref } of extractCssRefs(t.raw)) noteRef(ref);
+        if (apply && opts.bundle) {
+          const open = tokens[idx - 1];
+          const close = tokens[idx + 1];
+          opts.bundle.parts.push(wrapMedia(rewriteCssText(t.raw, opts), open ? getAttr(open, 'media') : null));
+          if (open) bundleSlot(open);
+          t.removed = true;
+          if (close && close.type === 'tag' && close.closing && close.name === 'style') close.removed = true;
+          continue;
+        }
         if (apply) t.raw = rewriteCssText(t.raw, opts);
       }
       continue;
@@ -392,6 +420,16 @@ export function processHtml(html, mode, opts) {
         if (apply) t.removed = true;
         continue;
       }
+      if (apply && opts.bundle && rels.includes('stylesheet')) {
+        const href = getAttr(t, 'href');
+        const r = href ? resolveRef(href, baseUrl) : null;
+        const text = r ? opts.bundle.cssTextFor(r.key) : null;
+        if (text !== null && text !== undefined) {
+          opts.bundle.parts.push(wrapMedia(text, getAttr(t, 'media')));
+          bundleSlot(t);
+          continue;
+        }
+      }
     }
     if (name === 'iframe') {
       const src = getAttr(t, 'src');
@@ -430,12 +468,23 @@ export function processHtml(html, mode, opts) {
       const kind = attrKind(t, a);
       if (!kind) continue;
       const val = decodeEntities(a.value ?? '');
+      // Chế độ gọn: thuộc tính data-* của lazy-load vô nghĩa khi offline và sẽ nhân đôi dung lượng ảnh
+      if (opts.compact && a.name.startsWith('data-') && (kind === 'srcset' || kind === 'guess')) {
+        if (apply) removeAttr(t, a);
+        continue;
+      }
       if (kind === 'style') {
         for (const { ref } of extractCssRefs(val)) noteRef(ref);
         if (apply) { const nv = rewriteCssText(val, opts); if (nv !== val) setAttrObj(t, a, nv); }
       } else if (kind === 'srcset') {
-        const entries = parseSrcset(val);
+        let entries = parseSrcset(val);
         let changed = false;
+        if (opts.compact && entries.length > 1) {
+          // Chỉ giữ ứng viên lớn nhất để không phải nhúng cùng một ảnh nhiều khổ
+          const score = (e) => parseFloat(e.desc) || 1;
+          entries = [entries.reduce((b, e) => (score(e) > score(b) ? e : b))];
+          changed = true;
+        }
         for (const e of entries) {
           const r = noteRef(e.url);
           if (r && apply) { e.url = mapRef(r, false); changed = true; }
@@ -459,6 +508,12 @@ export function processHtml(html, mode, opts) {
     }
   }
 
+  if (apply && opts.bundle && slot && opts.bundle.parts.length) {
+    slot.removed = false;
+    slot.dirty = false;
+    slot.type = 'tag';
+    slot.raw = `<link rel="stylesheet" href="${relUrl(opts.fromLocal, opts.bundle.cssLocal)}">`;
+  }
   if (apply && !hasCharset && headIdx !== -1) {
     tokens.splice(headIdx + 1, 0, { type: 'text', raw: '<meta charset="utf-8">' });
   }

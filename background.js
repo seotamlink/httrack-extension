@@ -12,6 +12,7 @@ const SIZE_LIMIT = 1024 * 1024 * 1024; // 1GB
 let runActive = false;
 let cancelled = false;
 let state = { running: false, phase: 'idle', message: '', percent: 0, error: null, result: null, updatedAt: 0 };
+let resumeWaiter = null; // resolve khi người dùng bấm "Tiếp tục quét" (hoặc hủy)
 let writeTimer = null;
 let lastWrite = 0;
 
@@ -48,10 +49,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === 'offscreen') return false;
   if (msg.type === 'get-state') { sendResponse({ ok: true, state }); return false; }
   if (msg.type === 'cancel') {
-    if (runActive) { cancelled = true; setState({ message: 'Đang hủy, sẽ lưu phần đã hoàn thành...' }, true); }
+    if (runActive) { cancelled = true; resumeWaiter?.(); setState({ message: 'Đang hủy, sẽ lưu phần đã hoàn thành...' }, true); }
     sendResponse({ ok: true });
     return false;
   }
+  if (msg.type === 'resume') { resumeWaiter?.(); sendResponse({ ok: true }); return false; }
   if (msg.type === 'start') {
     if (runActive) { sendResponse({ ok: false, error: 'Đang có một tiến trình chạy. Hãy chờ hoặc bấm Hủy.' }); return false; }
     let cfg;
@@ -92,6 +94,9 @@ function sanitizeConfig(msg) {
     maxPages: mirror ? clamp(c.maxPages, 1, 5000, 100) : 1,
     delay: clamp(c.delay, 0, 10000, 800),
     includeSub: mirror && !!c.includeSub,
+    output: c.output === 'files' ? 'files' : 'bundle',
+    inlineSmall: c.inlineSmall !== false,
+    manual: !!c.manual,
     robots: mirror && c.robots !== false,
     devices
   };
@@ -134,8 +139,8 @@ async function executeRun(cfg) {
   const ctx = {
     cfg, report, zip, domain, rootHost,
     scope: { rootHost, includeSub: cfg.includeSub },
-    robots: null, limitHit: false, bytesPrev: 0, totalOk: 0, totalFail: 0, uniquePages: new Set(), pageList: null, fatal: null,
-    signals: {}, rootLocals: {}
+    robots: null, limitHit: false, totalOk: 0, totalFail: 0, uniquePages: new Set(), pageList: null, fatal: null,
+    signals: {}, rootLocals: {}, usedPaths: new Map(), store: null, preSessions: {}
   };
 
   try {
@@ -150,9 +155,17 @@ async function executeRun(cfg) {
       }
     }
 
+    if (cfg.manual) {
+      await openForManual(ctx);
+      if (cancelled) {
+        setState({ running: false, phase: 'cancelled', message: 'Đã hủy.', percent: 0 }, true);
+        return;
+      }
+    }
+
     for (let i = 0; i < cfg.devices.length && !cancelled && !ctx.limitHit; i++) {
       try {
-        if (cfg.devices[i].auto && !(await needMobilePass(ctx, cfg.devices[i]))) continue;
+        if (cfg.devices[i].auto && !cfg.manual && !(await needMobilePass(ctx, cfg.devices[i]))) continue;
         await runDevicePass(ctx, cfg.devices[i], i);
       } catch (e) {
         console.error('[HTTrack] lỗi lượt', cfg.devices[i].label, e);
@@ -186,8 +199,33 @@ async function executeRun(cfg) {
       message: `Đã lưu ${pages} trang, ${ctx.totalOk} tài nguyên (${ctx.totalFail} lỗi).`
     });
   } finally {
+    for (const s of Object.values(ctx.preSessions)) await s.close();
     await zip.dispose();
   }
+}
+
+// Chế độ thủ công: mở sẵn từng bản trong một tab thấy được, chờ người dùng tắt popup / F5 rồi mới quét
+async function openForManual(ctx) {
+  const { cfg } = ctx;
+  setState({ phase: 'capturing', message: 'Đang mở các bản để bạn xử lý popup...', percent: 2 }, true);
+  for (let i = 0; i < cfg.devices.length && !cancelled; i++) {
+    const device = cfg.devices[i];
+    const session = new CaptureSession(device, () => cancelled);
+    ctx.preSessions[device.key] = session;
+    await session.open(i === 0);
+    await session.navigate(cfg.rootUrl);
+  }
+  if (cancelled) return;
+  const names = cfg.devices.map((d) => d.label).join(' và ');
+  setState({
+    phase: 'waiting', percent: 5,
+    message: `Đã mở tab ${names}. Hãy tắt popup (hoặc F5) ở từng tab rồi mở lại popup này và bấm "Tiếp tục quét".`
+  }, true);
+  chrome.action.setBadgeText({ text: '!' });
+  await new Promise((resolve) => { resumeWaiter = resolve; });
+  resumeWaiter = null;
+  chrome.action.setBadgeText({ text: '' });
+  if (!cancelled) setState({ phase: 'capturing', message: 'Đang quét...', percent: 6 }, true);
 }
 
 async function packageZip(ctx, zipName) {
@@ -253,8 +291,8 @@ async function needMobilePass(ctx, device) {
 async function runDevicePass(ctx, device, deviceIndex) {
   const { cfg, report, zip, domain, rootHost, scope } = ctx;
   const label = device.label;
-  const prefix = `${domain}/${device.key}/`;
-  const usedPaths = new Map();
+  const prefix = `${domain}/`; // tài nguyên dùng chung ở gốc; mỗi thiết bị có thư mục trang riêng
+  const usedPaths = ctx.usedPaths;
   const discover = ctx.pageList === null; // lượt đầu tự khám phá; các lượt sau dùng lại danh sách trang
   const queue = discover
     ? new CrawlQueue({ maxDepth: cfg.maxDepth, maxPages: cfg.maxPages })
@@ -262,23 +300,33 @@ async function runDevicePass(ctx, device, deviceIndex) {
   if (discover) queue.tryAdd(cfg.rootUrl, 0);
   else ctx.pageList.forEach((p) => queue.tryAdd(p.url, p.depth));
 
-  const store = new AssetStore({
-    rootHost, usedPaths, zip, prefix, report, device: label,
-    totalBudget: SIZE_LIMIT - ctx.bytesPrev,
-    onLimit: () => { ctx.limitHit = true; },
-    onProgress: (done, total) => {
-      if (state.phase === 'capturing') setState({ message: `Đang tải tài nguyên ${done}/${total}` });
-    }
-  });
+  // Một kho tài nguyên chung cho mọi thiết bị: cùng URL chỉ tải và lưu một lần
+  if (!ctx.store) {
+    ctx.store = new AssetStore({
+      rootHost, usedPaths, zip, prefix, report, device: label,
+      totalBudget: SIZE_LIMIT,
+      bundle: cfg.output === 'bundle',
+      inlineMax: cfg.inlineSmall ? 6 * 1024 : 0,
+      onLimit: () => { ctx.limitHit = true; },
+      onProgress: (done, total) => {
+        if (state.phase === 'capturing') setState({ message: `Đang tải tài nguyên ${done}/${total}` });
+      }
+    });
+  }
+  const store = ctx.store;
+  store.device = label;
 
   const pages = new Map();       // URL chuẩn hóa -> bản ghi trang
   const records = [];            // danh sách bản ghi duy nhất
   const blockedReported = new Set();
-  const session = new CaptureSession(device, () => cancelled);
+  const pre = ctx.preSessions[device.key] || null; // tab đã mở sẵn ở chế độ thủ công
+  const session = pre || new CaptureSession(device, () => cancelled);
+  session.preloaded = !!pre;
   const pct = (frac) => Math.min(95, Math.round(((deviceIndex + frac) / cfg.devices.length) * 95));
 
   try {
-    await session.open();
+    if (!pre) await session.open();
+    delete ctx.preSessions[device.key];
 
     let item;
     while (!cancelled && !ctx.limitHit && (item = queue.next())) {
@@ -305,7 +353,10 @@ async function runDevicePass(ctx, device, deviceIndex) {
 
     // Lượt cuối: viết lại link <a> nội bộ rồi ghi HTML vào ZIP
     setState({ message: `Đang hoàn thiện bản ${label}...`, percent: pct(0.95) });
-    const resolveLink = (norm, key) => pages.get(norm)?.local || store.localFor(key);
+    const resolveLink = (norm, key) => {
+      const l = pages.get(norm)?.local || store.localFor(key);
+      return l && l.startsWith('data:') ? null : l; // ảnh đã gộp không dùng làm đích link
+    };
     for (const p of records) {
       const r = processHtml(p.html, 'links', {
         baseUrl: p.baseUrl, fromLocal: p.local, resolveLink,
@@ -327,14 +378,15 @@ async function runDevicePass(ctx, device, deviceIndex) {
     }
   } finally {
     await session.close();
-    ctx.totalOk += store.okCount;
-    ctx.totalFail += store.failCount;
-    ctx.bytesPrev += store.bytes;
+    ctx.totalOk = store.okCount;
+    ctx.totalFail = store.failCount;
   }
 
   // ----- Xử lý một trang -----
   async function processPage(item) {
-    await session.navigate(item.url);
+    // Trang gốc ở chế độ thủ công: giữ nguyên trang người dùng đã dọn popup, không tải lại
+    if (session.preloaded && item.url === cfg.rootUrl) session.preloaded = false;
+    else await session.navigate(item.url);
     if (cancelled) return null;
     if (session.docStatus && session.docStatus >= 400) {
       report.skipPage(label, item.url, `lỗi HTTP ${session.docStatus}`);
@@ -363,10 +415,11 @@ async function runDevicePass(ctx, device, deviceIndex) {
       if (!blockedReported.has(u)) { blockedReported.add(u); report.resSkipped.push({ device: label, url: u, reason: 'domain quảng cáo/analytics' }); }
     });
     info.blobs.forEach((u) => report.resSkipped.push({ device: label, url: u, reason: 'blob: URL' }));
+    if (info.rotateRemoved) report.note(`[${label}] ${item.url}: đã xóa ${info.rotateRemoved} lớp nhắc xoay màn hình`);
     info.cssErrors.forEach((u) => report.note(`[${label}] không đọc được CSSOM của stylesheet cross-origin: ${u} (vẫn tải file CSS trực tiếp)`));
 
     // Thu thập tài nguyên: DOM/CSSOM + Network
-    const extract = processHtml(info.html, 'extract', { baseUrl });
+    const extract = processHtml(info.html, 'extract', { baseUrl, compact: cfg.output === 'bundle' });
     const urls = new Set([...extract.refs.resources, ...info.extra, ...session.bodies.keys()]);
     urls.delete(assetKey(info.finalUrl));
     await store.ensureMany(urls, { bodies: session.bodies });
@@ -391,10 +444,23 @@ async function runDevicePass(ctx, device, deviceIndex) {
       await store.ensureMany(docs, { maxBytes: MAX_DOC_BYTES });
     }
 
-    const local = pageLocalPath(item.url, rootHost, usedPaths);
+    const local = pageLocalPath(item.url, rootHost, usedPaths, device.key);
+    // Gói gọn: mọi stylesheet gộp thành một file CSS cạnh file HTML của trang
+    let bundle = null;
+    if (cfg.output === 'bundle') {
+      let cssLocal = local.replace(/\.[^./]+$/, '') + '.css';
+      if (usedPaths.has(cssLocal.toLowerCase())) cssLocal = cssLocal.replace(/\.css$/, '_style.css');
+      usedPaths.set(cssLocal.toLowerCase(), 'css:' + item.url);
+      bundle = { parts: [], cssLocal, cssTextFor: (k) => store.cssTextFor(k) };
+    }
     const res = processHtml(info.html, 'resources', {
-      baseUrl, fromLocal: local, resolveAsset: (k) => store.localFor(k), isBlocked: isBlockedUrl
+      baseUrl, fromLocal: local, resolveAsset: (k) => store.localFor(k), isBlocked: isBlockedUrl,
+      compact: cfg.output === 'bundle', bundle
     });
+    if (bundle && bundle.parts.length) {
+      const up = '../'.repeat(bundle.cssLocal.split('/').length - 1); // từ file CSS về thư mục gốc chứa images/
+      await zip.addFile(prefix + bundle.cssLocal, bundle.parts.join('\n').replace(/\u0001/g, up), { compress: true });
+    }
     if (res.refs.scripts) report.scripts.push({ device: label, url: item.url, count: res.refs.scripts });
     res.refs.iframesRemoved.forEach((u) => report.resSkipped.push({ device: label, url: u, reason: 'iframe quảng cáo/analytics đã xóa' }));
     if (res.refs.baseRemoved) report.note(`[${label}] ${item.url}: đã xóa ${res.refs.baseRemoved} thẻ <base>`);

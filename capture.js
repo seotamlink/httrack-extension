@@ -171,9 +171,28 @@ function pageCollect() {
     }
   }
 
+  // Lớp nhắc "xoay màn hình": ẩn khi chụp (khổ dọc) nhưng hiện lên khi mở bản đã lưu trên cửa sổ ngang -> xóa khỏi HTML
+  const rotateRe = /xoay (ngang|màn hình|điện thoại|thiết bị)|chiều dọc|chiều ngang|rotate (your|the) (device|phone|screen)|please rotate|portrait mode|landscape mode/i;
+  const isHidden = (el) => {
+    const cs = getComputedStyle(el);
+    return el.getClientRects().length === 0 || cs.visibility === 'hidden' || cs.opacity === '0';
+  };
+  const rotateNodes = [];
+  for (const el of document.body ? document.body.querySelectorAll('*') : []) {
+    if (el.children.length > 0 || /^(script|style|noscript)$/i.test(el.tagName)) continue;
+    const txt = (el.textContent || '').trim();
+    if (txt.length < 8 || txt.length > 200 || !rotateRe.test(txt) || !isHidden(el)) continue;
+    let box = el;
+    while (box.parentElement && box.parentElement !== document.body &&
+      box.parentElement.children.length <= 3 && (box.parentElement.textContent || '').trim().length <= 200) box = box.parentElement;
+    rotateNodes.push(box);
+  }
+  rotateNodes.forEach((n) => n.remove());
+  out.rotateRemoved = rotateNodes.length;
+
   out.extra = Array.from(extra);
   out.blobs = Array.from(blobs);
-  out.html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+  out.html ='<!DOCTYPE html>\n' + document.documentElement.outerHTML;
   return out;
 }
 
@@ -207,8 +226,8 @@ export class CaptureSession {
   }
 
   // ----- Vòng đời -----
-  async open() {
-    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  async open(active = false) {
+    const tab = await chrome.tabs.create({ url: 'about:blank', active });
     this.tabId = tab.id;
     sessions.set(this.tabId, this);
     try {
