@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 let currentTab = null;
 let running = false;
 
-const inputs = ['maxDepth', 'maxPages', 'delay', 'includeSub', 'robots', 'devDesktop', 'mobileMode', 'mobileWidth'];
+const inputs = ['maxDepth', 'maxPages', 'delay', 'includeSub', 'robots', 'mobileWidth'];
 
 function getMode() {
   return document.querySelector('input[name="mode"]:checked').value;
@@ -26,8 +26,6 @@ function readConfig() {
     output: $('output').value,
     inlineSmall: $('inlineSmall').checked,
     manual: $('manual').checked,
-    desktop: $('devDesktop').checked,
-    mobileMode: $('mobileMode').value,
     mobileWidth: Number($('mobileWidth').value)
   };
 }
@@ -43,8 +41,6 @@ function applyConfig(c) {
   $('inlineSmall').checked = c.inlineSmall !== false;
   $('manual').checked = !!c.manual;
   $('output').value = c.output === 'files' ? 'files' : 'bundle';
-  $('devDesktop').checked = c.desktop !== false;
-  $('mobileMode').value = c.mobileMode || (c.mobile === true ? 'on' : 'auto');
   if (c.mobileWidth != null) $('mobileWidth').value = c.mobileWidth;
 }
 
@@ -57,7 +53,6 @@ function updateModeUi() {
   $('outputHint').textContent = OUTPUT_HINTS[$('output').value];
   $('inlineRow').hidden = $('output').value === 'bundle';
   $('mirrorBox').hidden = getMode() !== 'mirror';
-  $('mobileWidthRow').hidden = $('mobileMode').value === 'off';
 }
 
 function showError(text) {
@@ -92,7 +87,6 @@ async function loadState() {
 async function start() {
   showError('');
   const cfg = readConfig();
-  if (!cfg.desktop && cfg.mobileMode === 'off') { showError('Hãy bật bản Responsive hoặc bản mobile.'); return; }
   if (!currentTab || !/^https?:/i.test(currentTab.url || '')) { showError('Chỉ lưu được trang http hoặc https.'); return; }
   try { await chrome.storage.local.set({ [CFG_KEY]: cfg }); } catch (e) { /* không quan trọng */ }
   $('mainBtn').disabled = true;
@@ -124,13 +118,7 @@ async function init() {
   updateModeUi();
 
   document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', updateModeUi));
-  $('mobileMode').addEventListener('change', updateModeUi);
   $('output').addEventListener('change', updateModeUi);
-  // Không cho tắt cả hai: bỏ Responsive thì bản mobile không được là "Tắt"
-  $('devDesktop').addEventListener('change', () => {
-    if (!$('devDesktop').checked && $('mobileMode').value === 'off') $('mobileMode').value = 'on';
-    updateModeUi();
-  });
   $('mainBtn').addEventListener('click', () => (running ? cancel() : start()));
   $('resumeBtn').addEventListener('click', async () => {
     $('resumeBtn').hidden = true;

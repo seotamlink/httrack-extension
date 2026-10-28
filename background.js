@@ -76,16 +76,10 @@ function sanitizeConfig(msg) {
   let root;
   try { root = new URL(msg.url); } catch { throw new Error('URL của tab hiện tại không hợp lệ.'); }
   if (root.protocol !== 'http:' && root.protocol !== 'https:') throw new Error('Chỉ hỗ trợ trang http hoặc https.');
-  const devices = [];
-  const wantResp = c.desktop !== false;
-  const mobileMode = ['off', 'auto', 'on'].includes(c.mobileMode) ? c.mobileMode : 'auto';
-  if (!wantResp && mobileMode === 'off') throw new Error('Hãy bật bản Responsive hoặc bản mobile.');
-  if (wantResp) devices.push(DEVICES.desktop);
-  if (mobileMode !== 'off') {
-    const m = mobileDevice(clamp(c.mobileWidth, 280, 600, 393));
-    m.auto = wantResp && mobileMode === 'auto'; // tự kiểm tra xem có cần bản mobile riêng không
-    devices.push(m);
-  }
+  // Luôn xuất cả hai bản: PC (responsive) và mobile
+  const m = mobileDevice(clamp(c.mobileWidth, 280, 600, 393));
+  m.auto = false;
+  const devices = [DEVICES.desktop, m];
   const mirror = c.mode === 'mirror';
   return {
     rootUrl: normalizeUrl(root.href),
