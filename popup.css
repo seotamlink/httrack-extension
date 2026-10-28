@@ -102,7 +102,6 @@ button#mainBtn:disabled { opacity: .5; cursor: not-allowed; }
 #mobileWidthRow { margin-top: 6px; }
 
 .chips.one { grid-template-columns: 1fr; }
-select#mobileMode { padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
 .check[hidden] { display: none; }
 select#output { padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
 
