@@ -23,6 +23,8 @@ class HTTrack_Static_Home {
 	const M_LINKNEW = '_htsh_link_new';
 	const M_LINKSCP = '_htsh_link_scope';
 	const M_LINKSEL = '_htsh_link_sel';
+	const M_REL     = '_htsh_rel';
+	const M_RELSCP  = '_htsh_rel_scope';
 	const PLACEHOLD = '<!-- Trang tĩnh do plugin HTTrack Static Home phục vụ. Nội dung nằm trong bản lưu, không sửa ở đây. -->';
 
 	public static function init() {
@@ -271,6 +273,17 @@ class HTTrack_Static_Home {
 		echo '<option value="all" ' . selected($scope, 'all', false) . '>Nút và mọi link &lt;a&gt; trong trang</option>';
 		echo '</select></label></p>';
 		echo '<p><label for="htsh_link_sel">Thêm phần tử khác (CSS selector, cách nhau bằng dấu phẩy)</label><br><input type="text" id="htsh_link_sel" name="htsh_link_sel" class="large-text code" placeholder=".dang-ky, #nut-nap, .banner" value="' . esc_attr(get_post_meta($post->ID, self::M_LINKSEL, true)) . '"><br><span class="description">Dùng cho nút làm bằng thẻ khác (div, img...). Phần tử nào có thuộc tính <code>data-htsh-ignore</code> (hoặc nằm trong nó) sẽ không bị chuyển link.</span></p><hr>';
+		$rel    = (array) get_post_meta($post->ID, self::M_REL, true);
+		$relscp = get_post_meta($post->ID, self::M_RELSCP, true) ?: 'external';
+		echo '<p><strong>Thêm rel cho link / nút (hàng loạt)</strong><br><span class="description">Tự thêm thuộc tính <code>rel</code> vào các thẻ &lt;a&gt; ngay trong HTML nên Google đọc được. Thẻ có <code>data-htsh-ignore</code> được bỏ qua.</span></p><p>';
+		foreach (array('nofollow' => 'nofollow', 'sponsored' => 'sponsored', 'ugc' => 'ugc', 'noopener' => 'noopener', 'noreferrer' => 'noreferrer') as $k => $label) {
+			echo '<label style="margin-right:12px"><input type="checkbox" name="htsh_rel[]" value="' . esc_attr($k) . '" ' . checked(in_array($k, $rel, true), true, false) . '> ' . esc_html($label) . '</label>';
+		}
+		echo '</p><p><label>Áp dụng cho: <select name="htsh_rel_scope">';
+		foreach (array('external' => 'Chỉ link ra ngoài (khác tên miền của web)', 'buttons' => 'Chỉ nút dạng link (class có btn/button, role=button)', 'all' => 'Mọi link <a> trong trang') as $k => $label) {
+			echo '<option value="' . esc_attr($k) . '" ' . selected($relscp, $k, false) . '>' . esc_html($label) . '</option>';
+		}
+		echo '</select></label></p><hr>';
 		echo '<p><label for="htsh_head"><strong>Mã chèn vào &lt;head&gt;</strong> (schema, pixel, analytics...)</label><br>';
 		echo '<textarea id="htsh_head" name="htsh_head" class="large-text code" rows="5" ' . disabled(!$can, true, false) . '>' . esc_textarea(get_post_meta($post->ID, self::M_HEAD, true)) . '</textarea></p>';
 		echo '<p><label for="htsh_body"><strong>Mã chèn trước &lt;/body&gt;</strong> (popup, form, link nổi...)</label><br>';
@@ -298,6 +311,11 @@ class HTTrack_Static_Home {
 		update_post_meta($post_id, self::M_LINKNEW, !empty($_POST['htsh_link_new']) ? '1' : '');
 		update_post_meta($post_id, self::M_LINKSCP, $scope === 'all' ? 'all' : 'buttons');
 		update_post_meta($post_id, self::M_LINKSEL, sanitize_text_field(wp_unslash(isset($_POST['htsh_link_sel']) ? $_POST['htsh_link_sel'] : '')));
+		$allowed = array('nofollow', 'sponsored', 'ugc', 'noopener', 'noreferrer');
+		$rel     = isset($_POST['htsh_rel']) ? array_values(array_intersect($allowed, array_map('sanitize_key', (array) wp_unslash($_POST['htsh_rel'])))) : array();
+		$relscp  = isset($_POST['htsh_rel_scope']) ? sanitize_key(wp_unslash($_POST['htsh_rel_scope'])) : 'external';
+		update_post_meta($post_id, self::M_REL, $rel);
+		update_post_meta($post_id, self::M_RELSCP, in_array($relscp, array('external', 'buttons', 'all'), true) ? $relscp : 'external');
 		if (current_user_can('unfiltered_html')) {
 			update_post_meta($post_id, self::M_HEAD, wp_unslash(isset($_POST['htsh_head']) ? $_POST['htsh_head'] : ''));
 			update_post_meta($post_id, self::M_BODY, wp_unslash(isset($_POST['htsh_body']) ? $_POST['htsh_body'] : ''));
@@ -427,14 +445,51 @@ class HTTrack_Static_Home {
 
 	/* ---------- Dựng HTML trả về ---------- */
 
+	/* Thêm các token vào rel của thẻ <a> theo phạm vi, giữ nguyên rel sẵn có. */
+	public static function apply_rel($html, $tokens, $scope) {
+		$host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
+		return preg_replace_callback('/<a\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>/i', function ($m) use ($tokens, $scope, $host) {
+			$tag = $m[0];
+			if (stripos($tag, 'data-htsh-ignore') !== false) {
+				return $tag;
+			}
+			$attr = function ($name) use ($tag) {
+				return preg_match('/\s' . $name . '\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/i', $tag, $a)
+					? html_entity_decode(implode('', array_slice($a, 1)), ENT_QUOTES) : null;
+			};
+			$href = $attr('href');
+			if ($href === null) {
+				return $tag;
+			}
+			if ($scope === 'external') {
+				if (!preg_match('#^(?:https?:)?//([^/:?\#]+)#i', trim($href), $h) || strtolower($h[1]) === $host) {
+					return $tag;
+				}
+			} elseif ($scope === 'buttons') {
+				$class = (string) $attr('class');
+				if (!preg_match('/btn|button/i', $class) && strtolower((string) $attr('role')) !== 'button') {
+					return $tag;
+				}
+			}
+			$cur = preg_split('/\s+/', strtolower(trim((string) $attr('rel'))), -1, PREG_SPLIT_NO_EMPTY);
+			$new = esc_attr(implode(' ', array_unique(array_merge($cur, $tokens))));
+			$tag = preg_replace('/\srel\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $tag);
+			return preg_replace('/^<a\b/i', '<a rel="' . $new . '"', $tag, 1);
+		}, $html);
+	}
+
 	/*
 	 * Ghép bản lưu với phần <head> do WordPress/SEO plugin sinh ra.
 	 * Dùng preg_replace_callback để chuỗi người dùng nhập (có $1, \) không bị hiểu nhầm là tham chiếu regex.
 	 */
-	public static function render_html($html, $base, $wp_head, $fallback_title, $head_code, $body_code, $btn = null) {
+	public static function render_html($html, $base, $wp_head, $fallback_title, $head_code, $body_code, $btn = null, $rel = null) {
 		$strip = function ($pattern) use (&$html) {
 			$html = preg_replace($pattern, '', $html);
 		};
+
+		if ($rel && !empty($rel['tokens'])) {
+			$html = self::apply_rel($html, $rel['tokens'], $rel['scope']);
+		}
 
 		// Không để CSS lọt vào từ wp_head: tránh xung đột với CSS của bản lưu
 		$wp_head = preg_replace('/<style\b[^>]*>.*?<\/style>\s*/is', '', $wp_head);
@@ -560,6 +615,10 @@ class HTTrack_Static_Home {
 				'blank' => get_post_meta($id, self::M_LINKNEW, true) === '1',
 				'scope' => get_post_meta($id, self::M_LINKSCP, true) ?: 'buttons',
 				'extra' => (string) get_post_meta($id, self::M_LINKSEL, true),
+			),
+			array(
+				'tokens' => (array) get_post_meta($id, self::M_REL, true),
+				'scope'  => get_post_meta($id, self::M_RELSCP, true) ?: 'external',
 			)
 		);
 
